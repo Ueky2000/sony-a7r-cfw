@@ -9,7 +9,7 @@
 ## 下载与刷机前必读
 
 > [!CAUTION]
-> **请谨慎下载和刷写。** 本项目提供的是面向 **Sony ILCE-7R（一代）** 的非官方固件源码。刷机可能造成数据或设置丢失、相机无法启动，甚至需要维修。请先确认机型，读完[刷机与恢复手册](docs/FLASHING_AND_RECOVERY.md)，备份机身数据并确认回滚方案。无法接受这些风险时，请勿刷机。
+> **请谨慎下载和刷写。** 本项目提供的是面向 **Sony ILCE-7R（一代）** 的非官方固件与源码。刷机可能造成数据或设置丢失、相机无法启动，甚至需要维修。请先确认机型，读完[刷机与恢复手册](docs/FLASHING_AND_RECOVERY.md)，备份机身数据并确认回滚方案。无法接受这些风险时，请勿刷机。
 >
 > **换电池后冷启动约需 15–20 秒。** CFW v3.36 为避免原厂 WBI1 快照与修改后的固件不兼容，从升级包中移除了该快照。完全断电后重新装入电池，相机需要完整冷启动。日常用电源开关关机再开机，通常约 1 秒恢复取景。
 >
@@ -83,7 +83,7 @@
 
 ---
 
-## 从本地构建的固件刷机
+## 固件下载与刷机
 
 > [!CAUTION]
 > **刷机前必做**：
@@ -91,9 +91,13 @@
 > 2. **取出 SD 卡**，确保电池电量 **≥ 50%**，相机 USB 连接模式设为 **大容量存储（Mass Storage）**，直连主板 USB 口，全程切勿断电或拔线；
 > 3. 详细备份、验收与救砖步骤请务必先阅读 **[docs/FLASHING_AND_RECOVERY.md](docs/FLASHING_AND_RECOVERY.md)**。
 
-### 下载源码与生成刷机文件
+### 下载 CFW v3.36
 
-在 [GitHub Releases](https://github.com/Ueky2000/sony-a7r-cfw/releases/tag/v3.36) 下载源码 ZIP 和 `SHA256SUMS.txt`。按下文的构建步骤准备索尼官方 ILCE-7R v3.20 固件，在本地生成 `.dat` 刷机文件并完成离线审计。两个本地输出的路径和校验值见[刷机与恢复手册](docs/FLASHING_AND_RECOVERY.md)。
+- [自制固件 .dat](https://github.com/Ueky2000/sony-a7r-cfw/releases/download/v3.36/ILCE-7R_CFW_v3.36_firmware.dat)
+- [固件 SHA-256 校验清单](https://github.com/Ueky2000/sony-a7r-cfw/releases/download/v3.36/SHA256SUMS_FIRMWARE.txt)
+- [v3.36 发布页与源码下载](https://github.com/Ueky2000/sony-a7r-cfw/releases/tag/v3.36)
+
+刷机前请先按[刷机与恢复手册](docs/FLASHING_AND_RECOVERY.md)完成备份、核对下载文件的 SHA-256，并准备回滚方案。回滚包 v3.37 可用索尼官方 ILCE-7R v3.20 固件按下文步骤本地构建。将下载的自制固件放在仓库根目录。
 
 在仓库根目录使用 [Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE) 刷入（以 Windows 为例）：
 ```powershell
@@ -101,7 +105,7 @@
 python tools\Sony-PMCA-RE-master\pmca-console.py info -d native
 
 # 2. 刷入 CFW v3.36（若在 Switching to updater mode 超时，按相机屏幕提示确认后重跑同一条命令续接）
-python tools\Sony-PMCA-RE-master\pmca-console.py firmware -d native -f firmware\repacked\a7r_cfw_v336\firmware_packed.dat
+python tools\Sony-PMCA-RE-master\pmca-console.py firmware -d native -f .\ILCE-7R_CFW_v3.36_firmware.dat
 ```
 
 ---
