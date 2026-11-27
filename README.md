@@ -6,6 +6,16 @@
 [![Offline Audit](https://img.shields.io/badge/Offline%20Audit-64%2F64%20PASS-success)](#)
 [![Unicorn Tests](https://img.shields.io/badge/Unicorn%20ARMv7--A-32%2F32%20PASS-success)](#)
 
+## 下载与刷机前必读
+
+> [!CAUTION]
+> **请谨慎下载和刷写。** 本项目提供的是面向 **Sony ILCE-7R（一代）** 的非官方固件源码。刷机可能造成数据或设置丢失、相机无法启动，甚至需要维修。请先确认机型，读完[刷机与恢复手册](docs/FLASHING_AND_RECOVERY.md)，备份机身数据并确认回滚方案。无法接受这些风险时，请勿刷机。
+>
+> **换电池后冷启动约需 15–20 秒。** CFW v3.36 为避免原厂 WBI1 快照与修改后的固件不兼容，从升级包中移除了该快照。完全断电后重新装入电池，相机需要完整冷启动。日常用电源开关关机再开机，通常约 1 秒恢复取景。
+>
+> **刷机风险由使用者自行承担。** 本项目按现状提供。在适用法律允许的范围内，项目作者和贡献者不提供任何保证，也不承担因下载、构建、刷写或使用本项目造成的设备损坏、数据丢失、维修费用或其他损失。
+
+
 为 **Sony ILCE-7R（一代，CXD90014 SoC / 官方固件 v3.20）** 开发的系统原生四合一自制固件。全部功能均以原生菜单项、原生持久化存储（`Backup.bin` 零引用空闲槽位）与原生 Thumb-2 / BIONZ 机器码方式深度整合，**已在实机 ILCE-7R 上完整刷机与实拍验证**。构建脚本可在本地生成 CFW v3.36 和基于官方 v3.20 的回滚包 v3.37。
 
 ---
@@ -145,5 +155,5 @@ python tools\Sony-PMCA-RE-master\pmca-console.py firmware -d native -f firmware\
 ## 致谢与免责声明
 
 - **开源社区致谢**：本项目受益于 [ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE)、[ma1co/fwtool.py](https://github.com/ma1co/fwtool.py)、[OpenMemories-Docs](https://github.com/ma1co/OpenMemories-Docs) 等索尼相机逆向生态项目。
-- **免责声明**：本自制固件与源码仅供学习、研究与个人爱好者自用，**不隶属于索尼公司（Sony Corporation）**。刷写非官方固件存在一定硬件风险，请务必提前做好 `Backup.bin` / `nflasha15` / `nflasha3` 全量备份并严格按照说明操作，因操作不当造成的任何损失需由使用者自行承担。
+- 本项目供学习、研究与个人爱好者自用，与索尼公司（Sony Corporation）无隶属关系。刷机风险与责任说明见[下载与刷机前必读](#下载与刷机前必读)。
 - **许可协议**：本仓库中的原创补丁脚本、C 语言引擎源码、测试套件及文档采用 [MIT License](LICENSE) 开源；索尼原厂固件版权归 Sony Corporation 所有。
