@@ -1,0 +1,430 @@
+"""TPZL (LZPT) de `nflasha3`: lectura, descompresión y reconstrucción determinista.
+
+El formato está documentado en `references/fwtool/fwtool/archive/lzpt.py` y el
+descompresor en `references/fwtool/fwtool/lz77/__init__.py`.  Aquí se reimplementa
+solo lo necesario para reconstruir la partición sin depender de `fwtool` en tiempo
+de ejecución; el resultado se contrasta con `fwtool` en la verificación del
+contenedor.
+
+Estructura:
+
+    cabecera 16 B: "TPZL", blockSize=16, tocOffset=0x18, tocSize
+    TOC: N pares (offset, size) little-endian
+    datos: N bloques comprimidos; cada bloque produce 65536 B (2**blockSize)
+
+Cada bloque son 16 registros independientes (LZ77 `0xF0` o almacenado `0x0F`) de
+4096 B de salida cada uno: así son todos los bloques de Sony y así lo exige la ruta
+Loader3 → ARM7 → LDEC, que programa `bloque >> 12` registros y lee sectores enteros
+(el desplazamiento dentro del sector no llega al LDEC).  Al recomponer un bloque se
+conservan los registros originales de las páginas de 4096 B que no cambian y solo
+las que cambian se emiten como registros almacenados (la forma que Sony usa para
+páginas incompresibles), todo alineado a 512 B (E26-R36; 3.25c: el bloque no pasa
+de los 126 sectores del `nflasha3` oficial).
+"""
+from __future__ import annotations
+
+import concurrent.futures
+import os
+import struct
+from dataclasses import dataclass
+
+MAGIC = b"TPZL"
+HEADER_SIZE = 16
+TOC_OFFSET = 0x18
+DEFAULT_BLOCK_LOG2 = 16
+ALIGN = 512
+RECORD = 4096
+RECORD_MAX = 4112  # cota de Sony por registro (cmpr.c: blk/4096 * 4112 + 8)
+_LENGTHS = list(range(3, 17)) + [32, 64]
+
+
+class TpzlError(ValueError):
+    """Cabecera, TOC o bloque TPZL inválido."""
+
+
+def _inflate_segment(block: bytes, pos: int) -> tuple[bytes, int]:
+    """Descomprime un segmento LZ77 y devuelve (salida, posición siguiente)."""
+    if pos >= len(block):
+        raise TpzlError("segmento LZ77 truncado")
+    kind = block[pos]
+    pos += 1
+    if kind == 0x0F:
+        if pos + 3 > len(block):
+            raise TpzlError("bloque sin comprimir truncado")
+        size = struct.unpack_from("<H", block, pos + 1)[0]
+        pos += 3
+        if pos + size > len(block):
+            raise TpzlError("bloque sin comprimir truncado")
+        return block[pos:pos + size], pos + size
+    if kind != 0xF0:
+        raise TpzlError(f"tipo LZ77 desconocido: {kind:#x}")
+
+    out = bytearray()
+    while True:
+        if pos >= len(block):
+            raise TpzlError("flujo LZ77 sin terminador")
+        flags = block[pos]
+        pos += 1
+        if flags == 0:
+            if pos + 8 > len(block):
+                raise TpzlError("grupo de 8 literales truncado")
+            out += block[pos:pos + 8]
+            pos += 8
+            continue
+        for bit in range(8):
+            if not (flags >> bit) & 1:
+                if pos >= len(block):
+                    raise TpzlError("literal truncado")
+                out.append(block[pos])
+                pos += 1
+                continue
+            if pos + 2 > len(block):
+                raise TpzlError("token de longitud/distancia truncado")
+            b0, b1 = block[pos], block[pos + 1]
+            pos += 2
+            length = _LENGTHS[b0 >> 4]
+            distance = ((b0 & 0x0F) << 8) | b1
+            if distance == 0:
+                return bytes(out), pos
+            if distance > len(out):
+                raise TpzlError(f"distancia {distance} mayor que la salida {len(out)}")
+            start = len(out) - distance
+            for i in range(length):
+                out.append(out[start + i])
+    return bytes(out), pos
+
+
+def decode_block(block: bytes, target: int) -> bytes:
+    """Descomprime un bloque completo hasta `target` bytes."""
+    out = bytearray()
+    pos = 0
+    while len(out) < target:
+        start = pos
+        chunk, pos = _inflate_segment(block, pos)
+        if pos <= start:
+            raise TpzlError("segmento sin avance")
+        out += chunk
+    if len(out) != target:
+        raise TpzlError(f"bloque de {len(out)} B, esperado {target} B")
+    return bytes(out)
+
+
+def encode_raw(data: bytes) -> bytes:
+    """Registros almacenados de 4096 B (`0F 00 <u16 len> datos`), como los de Sony."""
+    return b"".join(
+        b"\x0f\x00" + struct.pack("<H", len(data[i:i + RECORD])) + data[i:i + RECORD]
+        for i in range(0, len(data), RECORD)
+    )
+
+
+def encode_lz(data: bytes) -> bytes:
+    """Registro LZ77 `0xF0` en el formato de Sony: voraz, ventana 4095, longitudes de `_LENGTHS`.
+
+    Mismo repertorio que los registros de Sony en `nflasha3` (copias solapadas con distancia ≥ 1,
+    grupos de 8 literales con flags 0, fin = token índice 0 / distancia 0).
+    """
+    out = bytearray([0xF0])
+    n = len(data)
+    heads: dict[bytes, list[int]] = {}
+    longest = [(0, 0)] * n  # (longitud, distancia) de la coincidencia más larga en cada posición
+    for i in range(n):
+        key = data[i:i + 3]
+        best = (0, 0)
+        for j in reversed(heads.get(key, [])) if len(key) == 3 else ():
+            if i - j > 0xFFF:
+                break
+            m = min(64, n - i)                                # prefijo común sin bucle por byte: XOR de enteros big-endian
+            x = int.from_bytes(data[j:j + m]) ^ int.from_bytes(data[i:i + m])
+            k = m if not x else m - (x.bit_length() + 7) // 8
+            if k > best[0]:
+                best = (k, i - j)
+                if k == 64:
+                    break
+        longest[i] = best
+        heads.setdefault(key, []).append(i)
+    # análisis óptimo hacia atrás: literal = 9 bits, coincidencia = 17 bits (cada uno con su bit de flags)
+    cost = [0] * (n + 1)
+    choice = [0] * n
+    for i in range(n - 1, -1, -1):
+        cost[i], choice[i] = 9 + cost[i + 1], 0
+        for length in _LENGTHS:
+            if length > longest[i][0]:
+                break
+            if 17 + cost[i + length] < cost[i]:
+                cost[i], choice[i] = 17 + cost[i + length], length
+    items: list[bytes] = []  # cada uno: b"L"+literal o b"M"+token de 2 B
+    i = 0
+    while i < n:
+        length, dist = choice[i], longest[i][1]
+        if length:
+            items.append(b"M" + bytes([(_LENGTHS.index(length) << 4) | (dist >> 8), dist & 0xFF]))
+            i += length
+        else:
+            items.append(b"L" + data[i:i + 1])
+            i += 1
+    items.append(b"M\x00\x00")  # fin
+    for g in range(0, len(items), 8):
+        group = items[g:g + 8]
+        out.append(sum(1 << b for b, it in enumerate(group) if it[:1] == b"M"))
+        for it in group:
+            out += it[1:]
+    return bytes(out)
+
+
+def encode_literal(data: bytes) -> bytes:
+    """Segmento LZ77 de literales (sin coincidencias), terminado en `bd=0`.
+
+    Solo para pruebas del descompresor: un segmento de más de 4096 B no es un
+    registro válido para el LDEC (causa del fallo del 3.25, E26-R36).
+    """
+    out = bytearray([0xF0])
+    i = 0
+    while i + 8 <= len(data):
+        out.append(0)                       # flags = 0: ocho literales
+        out += data[i:i + 8]
+        i += 8
+    remaining = len(data) - i
+    if remaining:
+        out.append(1 << remaining)          # bits 0..remaining-1 = literal
+        out += data[i:]
+        out += b"\x00\x00"                  # token longitud 3 / distancia 0
+    else:
+        out += b"\x01\x00\x00"              # grupo vacío + terminador
+    return bytes(out)
+
+
+@dataclass(frozen=True)
+class TpzlImage:
+    """Vista inmutable de una partición TPZL."""
+
+    data: bytes
+    block_log2: int
+    toc_offset: int
+    entries: tuple[tuple[int, int], ...]
+
+    @property
+    def block_size(self) -> int:
+        return 1 << self.block_log2
+
+    @property
+    def data_offset(self) -> int:
+        return _align(self.toc_offset + len(self.entries) * 8)
+
+    @classmethod
+    def parse(cls, data: bytes) -> TpzlImage:
+        if len(data) < HEADER_SIZE:
+            raise TpzlError("archivo menor que la cabecera TPZL")
+        magic, block_log2, toc_offset, toc_size = struct.unpack_from("<4sIII", data, 0)
+        if magic != MAGIC:
+            raise TpzlError(f"magia TPZL inesperada: {magic!r}")
+        if not 12 <= block_log2 <= 20:
+            raise TpzlError(f"blockSize fuera de rango: {block_log2}")
+        if toc_size % 8:
+            raise TpzlError("TOC de tamaño no múltiplo de 8")
+        if toc_offset < HEADER_SIZE or toc_offset + toc_size > len(data):
+            raise TpzlError("TOC fuera del archivo")
+        entries = tuple(
+            struct.unpack_from("<II", data, toc_offset + i)
+            for i in range(0, toc_size, 8)
+        )
+        last = 0
+        for index, (offset, size) in enumerate(entries):
+            if offset < toc_offset + toc_size or offset >= len(data):
+                raise TpzlError(f"bloque fuera del archivo: {offset:#x}+{size:#x}")
+            if offset + size > len(data) and index != len(entries) - 1:
+                raise TpzlError(f"bloque fuera del archivo: {offset:#x}+{size:#x}")
+            if offset < last:
+                raise TpzlError("bloques TPZL solapados o desordenados")
+            last = offset + size
+        return cls(data, block_log2, toc_offset, entries)
+
+    def block(self, index: int) -> bytes:
+        offset, size = self.entries[index]
+        return self.data[offset:offset + size]
+
+    def target_size(self, index: int) -> int:
+        """Tamaño descomprimido del bloque (el último puede ser menor)."""
+        return self.block_size
+
+    def decompressed(self, workers: int | None = None) -> bytes:
+        """Todos los bloques descomprimidos; con muchos bloques se reparten entre procesos (todos los núcleos por defecto)."""
+        return b"".join(_decodificar([(self.block(i), self.target_size(i)) for i in range(len(self.entries))], workers))
+
+    def block_index(self, offset: int) -> int:
+        index, _rem = divmod(offset, self.block_size)
+        if index >= len(self.entries):
+            raise TpzlError(f"offset {offset:#x} fuera de la partición")
+        return index
+
+
+def _decode_job(args: tuple[bytes, int]) -> bytes:
+    return decode_block(*args)
+
+
+def _decodificar(jobs: list[tuple[bytes, int]], workers: int | None = None) -> list[bytes]:
+    workers = workers or os.cpu_count() or 1
+    if workers > 1 and len(jobs) > 32:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(_decode_job, jobs, chunksize=max(1, len(jobs) // (workers * 4))))
+    return [_decode_job(j) for j in jobs]
+
+
+def _align(value: int, align: int = ALIGN) -> int:
+    return (value + align - 1) // align * align
+
+
+def hardware_violations(image: TpzlImage) -> list[str]:
+    """Propiedades que el software acepta pero la ruta hardware de Loader3 no.
+
+    Residuo de sector distinto de 0, bloque que no sea `bloque/4096` registros de
+    4096 B o datos comprimidos por encima de la cota de Sony.
+    """
+    out: list[str] = []
+    records = image.block_size // RECORD
+    for index, (offset, _size) in enumerate(image.entries):
+        if offset & 0x1FF:
+            out.append(f"bloque {index}: residuo {offset & 0x1ff} B dentro del sector")
+        block, pos = image.block(index), 0
+        outputs: list[int] = []
+        while sum(outputs) < image.block_size:
+            chunk, pos = _inflate_segment(block, pos)
+            outputs.append(len(chunk))
+        if outputs != [RECORD] * records:
+            out.append(f"bloque {index}: {len(outputs)} registros de {sorted(set(outputs))} B")
+        if pos > records * RECORD_MAX + 8:
+            out.append(f"bloque {index}: {pos} B comprimidos > {records * RECORD_MAX + 8}")
+    return out
+
+
+def _splice(block: bytes, raw: bytes) -> bytes:
+    """Registros originales para las páginas de 4096 B que no cambian; almacenados para las que sí.
+
+    Mantiene el bloque cerca de su tamaño original (3.25c: ≤ 126 sectores, como Sony en `nflasha3`).
+    """
+    out, pos = bytearray(), 0
+    for page in range(0, len(raw), RECORD):
+        start = pos
+        chunk, pos = _inflate_segment(block, pos)
+        new = raw[page:page + RECORD]
+        if chunk == new:
+            out += block[start:pos]
+        else:  # R51 §6.6: almacenada hace crecer el bloque 0 y cuelga el LZP de Linux
+            out += min(encode_lz(new), encode_raw(new), key=len)
+    return bytes(out)
+
+
+def _comprimir_pagina(new: bytes) -> bytes:
+    """Una página de 4096 B cambiada (lo caro: LZ77 en Python): corre en un proceso del grupo."""
+    return min(encode_lz(new), encode_raw(new), key=len)
+
+
+def rebuild(image: TpzlImage, replacements: dict[int, bytes], workers: int | None = None) -> tuple[bytes, list[dict]]:
+    """Reconstruye la partición cambiando solo los bloques indicados.
+
+    `replacements` asocia índice de bloque con sus 65536 B descomprimidos.  El
+    resto de bloques se copia byte a byte, sin recomprimir.  En los bloques nuevos solo
+    las páginas cambiadas pasan a registros almacenados (`_splice`) y todo se alinea a
+    512 B con relleno 0x00.  Las páginas cambiadas de todos los bloques nuevos se comprimen
+    en paralelo, página a página (`workers` procesos; por defecto todos los núcleos).
+    """
+    planes: dict[int, list] = {}
+    paginas: list[bytes] = []
+    for index in sorted(replacements):
+        target = image.target_size(index)
+        if len(replacements[index]) != target:
+            raise TpzlError(f"bloque {index}: {len(replacements[index])} B, esperado {target} B")
+        original = image.block(index)
+        plan, pos = [], 0
+        for page in range(0, target, RECORD):
+            start = pos
+            chunk, pos = _inflate_segment(original, pos)
+            new = replacements[index][page:page + RECORD]
+            if chunk == new:
+                plan.append(original[start:pos])
+            else:
+                plan.append(len(paginas))
+                paginas.append(new)
+        planes[index] = plan
+    workers = workers or os.cpu_count() or 1
+    if workers > 1 and len(paginas) > 8:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
+            comp = list(pool.map(_comprimir_pagina, paginas, chunksize=2))
+    else:
+        comp = [_comprimir_pagina(p) for p in paginas]
+    done: dict[int, bytes] = {}
+    for index, plan in planes.items():
+        done[index] = b"".join(comp[x] if isinstance(x, int) else x for x in plan)
+        if decode_block(done[index], image.target_size(index)) != replacements[index]:
+            raise TpzlError(f"bloque {index}: la recompresión no reproduce el contenido")
+    blocks: list[bytes] = []
+    info: list[dict] = []
+    for index, (old_offset, old_size) in enumerate(image.entries):
+        if index in replacements:
+            compressed = done[index]
+            info.append({
+                "block": index,
+                "offset_old": old_offset,
+                "size_old": old_size,
+                "size_new": len(compressed),
+                "recompressed": True,
+            })
+        else:
+            compressed = image.block(index)
+            info.append({
+                "block": index,
+                "offset_old": old_offset,
+                "size_old": old_size,
+                "size_new": old_size,
+                "recompressed": False,
+            })
+        blocks.append(compressed)
+
+    data_start = image.data_offset
+    toc = bytearray()
+    body = bytearray()
+    cursor = data_start
+    for compressed in blocks:
+        padded_size = _align(len(compressed))
+        toc += struct.pack("<II", cursor, padded_size)
+        body += compressed
+        body += b"\x00" * (padded_size - len(compressed))
+        cursor += padded_size
+
+    header = struct.pack(
+        "<4sIII", MAGIC, image.block_log2, image.toc_offset, len(toc)
+    )
+    prefix = bytearray(header)
+    prefix += b"\x00" * (image.toc_offset - len(prefix))
+    prefix += toc
+    prefix += b"\x00" * (data_start - len(prefix))
+    out = bytes(prefix) + bytes(body)
+    rebuilt = TpzlImage.parse(out)
+    if rebuilt.decompressed() != _apply(image, replacements):
+        raise TpzlError("la partición reconstruida no reproduce el contenido previsto")
+    if violations := hardware_violations(rebuilt):
+        raise TpzlError(f"la partición no es apta para el LDEC: {violations[:3]}")
+    for item in info:
+        item["offset_new"] = rebuilt.entries[item["block"]][0]
+    return out, info
+
+
+def _apply(image: TpzlImage, replacements: dict[int, bytes]) -> bytes:
+    resto = [i for i in range(len(image.entries)) if i not in replacements]
+    hechos = dict(zip(resto, _decodificar([(image.block(i), image.target_size(i)) for i in resto])))
+    return b"".join(replacements[i] if i in replacements else hechos[i] for i in range(len(image.entries)))
+
+
+def patch_decompressed(image: TpzlImage, patched: bytes) -> tuple[bytes, list[dict]]:
+    """Sustituye el contenido descomprimido completo y recompone los bloques tocados."""
+    original = image.decompressed()
+    if len(patched) != len(original):
+        raise TpzlError(f"tamaño distinto: {len(patched)} != {len(original)}")
+    replacements: dict[int, bytes] = {}
+    for index in range(len(image.entries)):
+        lo = index * image.block_size
+        hi = lo + image.block_size
+        if patched[lo:hi] != original[lo:hi]:
+            replacements[index] = patched[lo:hi]
+    if not replacements:
+        raise TpzlError("no hay ningún bloque distinto")
+    return rebuild(image, replacements)

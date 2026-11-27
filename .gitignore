@@ -1,0 +1,26 @@
+# Personal camera dumps & NVRAM backups (NEVER commit!)
+backup_a7r_*.bin
+*.bin
+*.img
+
+# Sony proprietary firmware binaries & repacked .dat (>100 MiB — upload .dat to GitHub Releases instead)
+firmware/
+release/
+*.dat
+*.fdat
+*.tar
+
+# External third-party toolchains (install separately under tools/)
+tools/
+
+# Local reverse-engineering scratch & experimental directories
+analysis/
+src_bulb/
+
+# Python / OS artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.DS_Store
+Thumbs.db
