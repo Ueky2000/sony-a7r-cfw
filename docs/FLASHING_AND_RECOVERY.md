@@ -76,14 +76,26 @@ python tools\Sony-PMCA-RE-master\pmca-console.py updatershell -d native
 
 ## 四、刷入四合一自制固件（v3.36）与一键回滚官方固件（v3.37）
 
-下表列出按 [README 构建步骤](../README.md#从源码复现构建仿真与审计) 在本地生成的两个固件文件。GitHub Release 提供源码和源码校验清单。
+从 [v3.36 发布页](https://github.com/Ueky2000/sony-a7r-cfw/releases/tag/v3.36) 下载[自制固件 .dat](https://github.com/Ueky2000/sony-a7r-cfw/releases/download/v3.36/ILCE-7R_CFW_v3.36_firmware.dat)和[固件 SHA-256 校验清单](https://github.com/Ueky2000/sony-a7r-cfw/releases/download/v3.36/SHA256SUMS_FIRMWARE.txt)。将下载的固件放到仓库根目录。请在刷机前按 [README 构建步骤](https://github.com/Ueky2000/sony-a7r-cfw/blob/main/README.md#从源码复现构建仿真与审计) 准备本地回滚包。下表同时列出从源码构建时的输出位置。
 
 | 固件包 | 文件路径 | 大小 | SHA-256 |
 | :--- | :--- | :---: | :--- |
 | **四合一自制固件 CFW v3.36** *(支持从 v3.20 及任意既有 v3.21..v3.35 一步直刷)* | `firmware/repacked/a7r_cfw_v336/firmware_packed.dat` | `168,008,856 B` | `e4afedad84d645103d205adce0e2e4ef8837f7944e86ebacc6907f495cbbfed0` |
 | **100% 官方 v3.20 一键回滚包 v3.37** *(完整还原 `nflasha3` + `nflasha15` + `nflasha5`)* | `firmware/repacked/a7r_stock_rollback_v337/firmware_packed.dat` | `205,553,816 B` | `ded11f8d9ca9eea0684e465ec95fc726195ec72990b8bd6aa2fdf16991b3c9e5` |
 
-### 刷机前确认全部仿真与离线审计通过
+### 核对下载的自制固件
+
+在仓库根目录运行：
+
+```powershell
+Get-FileHash -Algorithm SHA256 -LiteralPath ".\ILCE-7R_CFW_v3.36_firmware.dat"
+```
+
+确认输出的 SHA-256 与上表或校验清单一致。若校验值不同，请勿刷机。
+
+### 本地构建后运行仿真与离线审计
+
+如果你自行构建了固件，请在刷机前运行：
 ```powershell
 python -B tests\test_interval_engine.py
 python -B tests\test_auto_iso_min_ss.py
@@ -91,10 +103,17 @@ python -B tests\test_bulb_engine.py
 python -B tests\test_ui_patches.py
 python -B src\audit_a7r_cfw.py
 ```
-确认输出 `ALL_CHECKS_PASSED: true`（64/64）后执行刷机：
+确认输出 `ALL_CHECKS_PASSED: true`（64/64）后再刷入本地构建的固件。
+
+### 刷入 CFW v3.36
+
+从仓库根目录执行以下命令：
+
 ```powershell
-python tools\Sony-PMCA-RE-master\pmca-console.py firmware -d native -f firmware\repacked\a7r_cfw_v336\firmware_packed.dat
+python tools\Sony-PMCA-RE-master\pmca-console.py firmware -d native -f .\ILCE-7R_CFW_v3.36_firmware.dat
 ```
+
+若使用本地构建的固件，将 `-f` 后的路径替换为 `firmware\repacked\a7r_cfw_v336\firmware_packed.dat`。
 
 > [!IMPORTANT]
 > - 刷机期间**切勿断电或拔掉 USB 线**，整个过程约 2–4 分钟。
