@@ -76,6 +76,8 @@ python tools\Sony-PMCA-RE-master\pmca-console.py updatershell -d native
 
 ## 四、刷入四合一自制固件（v3.36）与一键回滚官方固件（v3.37）
 
+下表列出按 [README 构建步骤](../README.md#从源码复现构建仿真与审计) 在本地生成的两个固件文件。GitHub Release 提供源码和源码校验清单。
+
 | 固件包 | 文件路径 | 大小 | SHA-256 |
 | :--- | :--- | :---: | :--- |
 | **四合一自制固件 CFW v3.36** *(支持从 v3.20 及任意既有 v3.21..v3.35 一步直刷)* | `firmware/repacked/a7r_cfw_v336/firmware_packed.dat` | `168,008,856 B` | `e4afedad84d645103d205adce0e2e4ef8837f7944e86ebacc6907f495cbbfed0` |

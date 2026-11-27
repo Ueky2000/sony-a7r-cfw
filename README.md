@@ -6,7 +6,7 @@
 [![Offline Audit](https://img.shields.io/badge/Offline%20Audit-64%2F64%20PASS-success)](#)
 [![Unicorn Tests](https://img.shields.io/badge/Unicorn%20ARMv7--A-32%2F32%20PASS-success)](#)
 
-为 **Sony ILCE-7R（一代，CXD90014 SoC / 官方固件 v3.20）** 开发的系统原生四合一自制固件。全部功能均以原生菜单项、原生持久化存储（`Backup.bin` 零引用空闲槽位）与原生 Thumb-2 / BIONZ 机器码方式深度整合，**已在实机 ILCE-7R 上完整刷机与实拍验证**，并提供 **100% 逐字节官方 v3.20 一键回滚包（v3.37）**。
+为 **Sony ILCE-7R（一代，CXD90014 SoC / 官方固件 v3.20）** 开发的系统原生四合一自制固件。全部功能均以原生菜单项、原生持久化存储（`Backup.bin` 零引用空闲槽位）与原生 Thumb-2 / BIONZ 机器码方式深度整合，**已在实机 ILCE-7R 上完整刷机与实拍验证**。构建脚本可在本地生成 CFW v3.36 和基于官方 v3.20 的回滚包 v3.37。
 
 ---
 
@@ -64,7 +64,7 @@
 
 ---
 
-## 快速刷机（直接下载 Release 固件）
+## 从本地构建的固件刷机
 
 > [!CAUTION]
 > **刷机前必做**：
@@ -72,22 +72,17 @@
 > 2. **取出 SD 卡**，确保电池电量 **≥ 50%**，相机 USB 连接模式设为 **大容量存储（Mass Storage）**，直连主板 USB 口，全程切勿断电或拔线；
 > 3. 详细备份、验收与救砖步骤请务必先阅读 **[docs/FLASHING_AND_RECOVERY.md](docs/FLASHING_AND_RECOVERY.md)**。
 
-### Release 固件文件与校验（SHA-256）
+### 下载源码与生成刷机文件
 
-请前往本仓库的 **GitHub Releases (`v3.36`)** 下载对应 `.dat` 文件，并核对 SHA-256：
+在 [GitHub Releases](https://github.com/Ueky2000/sony-a7r-cfw/releases/tag/v3.36) 下载源码 ZIP 和 `SHA256SUMS.txt`。按下文的构建步骤准备索尼官方 ILCE-7R v3.20 固件，在本地生成 `.dat` 刷机文件并完成离线审计。两个本地输出的路径和校验值见[刷机与恢复手册](docs/FLASHING_AND_RECOVERY.md)。
 
-| 固件包 | 文件名 | 大小 | SHA-256 |
-| :--- | :--- | :---: | :--- |
-| **四合一自制固件 CFW v3.36** *(支持从官方 v3.20 或任意旧版 CFW 直刷)* | `ILCE-7R_CFW_v3.36_firmware.dat` | `168,008,856 B` | `e4afedad84d645103d205adce0e2e4ef8837f7944e86ebacc6907f495cbbfed0` |
-| **100% 官方 v3.20 一键回滚包 v3.37** | `ILCE-7R_Stock_v3.20_Rollback_v3.37_firmware.dat` | `205,553,816 B` | `ded11f8d9ca9eea0684e465ec95fc726195ec72990b8bd6aa2fdf16991b3c9e5` |
-
-使用 [Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE) 刷入（以 Windows 为例）：
+在仓库根目录使用 [Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE) 刷入（以 Windows 为例）：
 ```powershell
 # 1. 检测相机型号是否为 ILCE-7R
-python pmca-console.py info -d native
+python tools\Sony-PMCA-RE-master\pmca-console.py info -d native
 
 # 2. 刷入 CFW v3.36（若在 Switching to updater mode 超时，按相机屏幕提示确认后重跑同一条命令续接）
-python pmca-console.py firmware -d native -f ILCE-7R_CFW_v3.36_firmware.dat
+python tools\Sony-PMCA-RE-master\pmca-console.py firmware -d native -f firmware\repacked\a7r_cfw_v336\firmware_packed.dat
 ```
 
 ---
